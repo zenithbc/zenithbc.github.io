@@ -423,6 +423,10 @@ function compute(typeKey, floorKey, pickedIds, P) {
 
    한 번 통과하면 세션 동안 기억한다. 새로고침이나 탭 복원에서 referrer가 사라져도
    같은 세션이면 다시 막히지 않게 하기 위한 것이다.                              */
+/* 유입 경로 제한 on/off — 네이버 카페가 외부 링크에 referrer를 붙이는지 확인할 때까지
+   임시로 꺼 둔다. 다시 켤 때는 이 값만 true로 바꾸고 재빌드하면 된다. */
+const ENTRY_GATE_ON = false;
+
 const ENTRY_ALLOW = ["cafe.naver.com", "naver.me"];
 const CAFE_URL = "https://cafe.naver.com/zenithbc";
 const PASS_KEY = "zenithbc:entry-ok";
@@ -448,6 +452,7 @@ function referrerAllowed() {
 }
 
 function entryAllowed() {
+  if (!ENTRY_GATE_ON) return true;
   if (referrerAllowed()) { writePass(); return true; }
   return readPass();
 }

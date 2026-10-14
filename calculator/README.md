@@ -60,8 +60,12 @@ npx esbuild entry.jsx --bundle --minify --format=iife --target=es2019 --charset=
 
 ## 유입 경로 제한
 
-협의회 카페를 통한 접근만 계산기를 보여주고, 그 외에는 안내 화면만 나옵니다
-(`app.jsx`의 `ENTRY_ALLOW`). 한 번 통과하면 `sessionStorage`에 기억하므로
+**현재 임시로 꺼져 있습니다.** `app.jsx`의 `ENTRY_GATE_ON`을 `true`로 바꾸고 다시
+빌드하면 켜집니다. 네이버 카페가 외부 링크에 referrer를 붙이는지 확인한 뒤 켜십시오.
+붙이지 않는다면 켜는 순간 정상 경로까지 전부 막힙니다.
+
+켜면 협의회 카페를 통한 접근만 계산기를 보여주고, 그 외에는 안내 화면만 나옵니다
+(허용 도메인은 `ENTRY_ALLOW`). 한 번 통과하면 `sessionStorage`에 기억하므로
 새로고침이나 탭 복원에서 referrer가 사라져도 같은 세션이면 다시 막히지 않습니다.
 
 이것은 보안 장치가 아닙니다. 정적 호스팅이라 서버에서 Referer를 볼 수 없고,
