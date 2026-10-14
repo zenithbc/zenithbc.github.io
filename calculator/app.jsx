@@ -244,6 +244,46 @@ const stampTotal = (a) =>
   : a <= 1_000_000_000 ? 150_000
   : 350_000;
 
+/* 연도별 금리 경로. 중도금 이자는 회차 실행일부터 입주일까지 쌓이므로, 그 구간을
+   연 단위로 쪼개 각 해의 금리를 적용한다. 단일 고정금리면 모든 해가 같은 값이다. */
+const RATE_YEARS = [2026, 2027, 2028, 2029, 2030, 2031, 2032];
+
+const RATE_PRESETS = {
+  flat:  { label: "현 금리 유지", f: (r) => RATE_YEARS.map(() => r) },
+  up:    { label: "완만한 상승", f: (r) => RATE_YEARS.map((_, i) => +(r + i * 0.25).toFixed(2)) },
+  spike: { label: "급등", f: (r) => RATE_YEARS.map((_, i) => +(r + i * 0.5).toFixed(2)) },
+  down:  { label: "점진 하락", f: (r) => RATE_YEARS.map((_, i) => +Math.max(1.5, r - i * 0.25).toFixed(2)) },
+};
+
+// [from, to] 구간에 금리 경로를 적용한 누적 이자율 계수(= Σ 월수 × 연이율 / 12 / 100)
+function rateFactor(from, to, path, flatRate) {
+  const a = new Date(from), b = new Date(to);
+  if (b <= a) return 0;
+  const totalMonths = monthsBetween(from, to);
+  if (!path) return (totalMonths * (flatRate / 100)) / 12;
+  // 구간 월수는 전체 일수에 비례해 나눈다. 그래야 모든 해가 같은 금리일 때
+  // 단일 고정 계산과 정확히 일치한다.
+  const totalMs = b - a;
+  let acc = 0;
+  for (let y = a.getFullYear(); y <= b.getFullYear(); y++) {
+    const segStart = new Date(Math.max(a, new Date(`${y}-01-01T00:00:00`)));
+    const segEnd = new Date(Math.min(b, new Date(`${y + 1}-01-01T00:00:00`)));
+    if (segEnd <= segStart) continue;
+    const idx = Math.min(RATE_YEARS.length - 1, Math.max(0, y - RATE_YEARS[0]));
+    const months = totalMonths * ((segEnd - segStart) / totalMs);
+    acc += (months * (path[idx] / 100)) / 12;
+  }
+  return acc;
+}
+
+// 월 상환액에서 거꾸로 대출 가능 원금을 구한다 (DSR 역산)
+const loanFromPayment = (payment, annualRate, years) => {
+  const i = annualRate / 12, n = years * 12;
+  if (payment <= 0) return 0;
+  if (i === 0) return payment * n;
+  return (payment * (1 - Math.pow(1 + i, -n))) / i;
+};
+
 const monthlyPayment = (principal, annualRate, years) => {
   const i = annualRate / 12, n = years * 12;
   if (i === 0) return principal / n;
@@ -289,7 +329,7 @@ function compute(typeKey, floorKey, pickedIds, P) {
     const n = i + 1;
     const financed = (n >= P.loanFrom && n <= P.loanTo) ? Math.min(midEach, left) : 0;
     left -= financed;
-    const it = (financed * (P.rate / 100) * m) / 12;
+    const it = financed * rateFactor(r.date, P.moveIn, P.ratePath, P.rate);
     // 보증료 = 보증금액 × 요율 × 보증기간 / 365 (실행 시 일시납)
     const fee = (financed * (P.gRate / 100) * m) / 12;
     interest += it; gFee += fee;
@@ -312,7 +352,8 @@ function compute(typeKey, floorKey, pickedIds, P) {
   const preRows = preOn ? eligible.slice(0, Math.min(P.preN, eligible.length)) : [];
   const preIds = new Set(preRows.map((r) => r.id));
   const prePrincipal = preRows.reduce((s, r) => s + r.financed, 0);
-  const preIntSaved = preRows.reduce((s, r) => s + (r.financed * (P.rate / 100) * preMonths) / 12, 0);
+  const preIntSaved = preRows.reduce(
+    (s, r) => s + r.financed * rateFactor(P.preDate, P.moveIn, P.ratePath, P.rate), 0);
   const preFeeBack = preRows.reduce((s, r) => s + (r.financed * (P.gRate / 100) * preMonths) / 12, 0);
   // 정액: 원금 × 요율 / 잔존기간 비례: 원금 × 요율 × 잔존기간 ÷ 해당 회차 대출기간
   const preFee = preRows.reduce((s, r) => s + r.financed * (P.preRate / 100)
@@ -344,7 +385,18 @@ function compute(typeKey, floorKey, pickedIds, P) {
   const acqTax = taxBase * acqRate;
 
   const grandTotal = price + optTotal + acqTax + settledInterest + gFee + stamps + preFee;
-  const maxLoan = Math.min(P.loanCap * 1e8, price * (P.ltv / 100));
+  const ruleLoan = Math.min(P.loanCap * 1e8, price * (P.ltv / 100));
+
+  /* DSR 역산 — 스트레스 금리를 더한 산정금리로 원리금을 계산한다.
+     실제로 내는 돈은 payRate 기준이지만, 한도 심사는 산정금리로 한다. */
+  const dsrRate = (P.payRate + P.stress) / 100;
+  const annualRoom = Math.max(0, P.income * 1e4 * (P.dsrCap / 100) - P.otherDebt * 1e4);
+  const dsrLoan = loanFromPayment(annualRoom / 12, dsrRate, P.dsrYears);
+  const dsrBinding = P.dsrOn && dsrLoan < ruleLoan;
+  const maxLoan = P.dsrOn ? Math.min(ruleLoan, dsrLoan) : ruleLoan;
+  // 규정 한도를 다 쓰려면 필요한 연소득
+  const needIncome = (monthlyPayment(ruleLoan, dsrRate, P.dsrYears) * 12
+    + P.otherDebt * 1e4) / (P.dsrCap / 100);
   const equityNeeded = grandTotal - maxLoan;
 
   const flow = P.sched.map((s0) => {
@@ -406,6 +458,7 @@ function compute(typeKey, floorKey, pickedIds, P) {
     preOn, preRows, preIds, prePrincipal, preIntSaved, preFeeBack, preFee,
     preMonths, preEligible: eligible.length, prePaidCount: paid.length,
     acqTax, acqRate, grandTotal, maxLoan, equityNeeded,
+    ruleLoan, dsrLoan, dsrBinding, needIncome, annualRoom, dsrRate,
     flow, path, endBalance: bal,
     mp: monthlyPayment(maxLoan, P.payRate / 100, 30),
     perPyeong: grandTotal / (T.sup / 3.3058),
@@ -520,8 +573,11 @@ const SHARE_FIELDS = [
   ["pa", "payRate"], ["lf", "loanFrom"], ["lt", "loanTo"],
   ["pe", "preOn"], ["pd", "preDate"], ["pn", "preN"], ["pr", "preRate"], ["pm", "preMode"],
   ["mi", "moveIn"], ["sd", "schedDates"],
+  ["rm", "rateMode"], ["rp", "ratePath"],
+  ["ds", "dsrOn"], ["st", "stress"], ["dc", "dsrCap"], ["dy", "dsrYears"],
 ];
-const MONEY_FIELDS = ["equityNow", "monthlySave"];
+// 공유 링크에서 제외 — 개인 재정에 해당한다
+const MONEY_FIELDS = ["equityNow", "monthlySave", "income", "otherDebt"];
 
 const SAVE_KEY = "zenithbc:saved-config";
 
@@ -545,9 +601,11 @@ function decodeState(search) {
     const raw = q.get(k);
     if (name === "picked") out[name] = raw ? raw.split(".") : [];
     else if (name === "schedDates") out[name] = raw ? raw.split(".") : null;
-    else if (["settle", "midCapOn", "preOn"].includes(name)) out[name] = raw === "true";
+    else if (name === "ratePath") out[name] = raw ? raw.split(".").map(Number) : null;
+    else if (name === "dsrOn") out[name] = raw === "true";
+    else if (["settle", "midCapOn", "preOn", "dsrOn"].includes(name)) out[name] = raw === "true";
     else if (["rate", "gRate", "midCap", "loanCap", "ltv", "payRate",
-              "loanFrom", "loanTo", "preN", "preRate"].includes(name)) {
+              "loanFrom", "loanTo", "preN", "preRate", "stress", "dsrCap", "dsrYears"].includes(name)) {
       const n = Number(raw);
       if (Number.isFinite(n)) out[name] = n;
     } else out[name] = raw;
@@ -592,6 +650,8 @@ const DEFAULTS = {
   midCapOn: false, midCap: 6.0, loanCap: 6.0, ltv: 70, payRate: 4.5,
   loanFrom: 1, loanTo: 6, preOn: false, preDate: "2030-01-15", preN: 1,
   preRate: 0, preMode: "slide", moveIn: MOVE_IN_PUB, schedDates: null,
+  rateMode: "fixed", ratePath: null,
+  dsrOn: false, income: 0, otherDebt: 0, stress: 3.0, dsrCap: 40, dsrYears: 30,
   equityNow: 0, monthlySave: 0,
 };
 
@@ -624,6 +684,14 @@ function Calculator() {
     ? SCHEDULE_PUB.map((r, i) => ({ ...r, date: B.schedDates[i] || r.date }))
     : SCHEDULE_PUB));
   const [moveIn, setMoveIn] = useState(B.moveIn);
+  const [rateMode, setRateMode] = useState(B.rateMode);
+  const [ratePath, setRatePath] = useState(B.ratePath || RATE_PRESETS.flat.f(B.rate));
+  const [dsrOn, setDsrOn] = useState(B.dsrOn);
+  const [income, setIncome] = useState(B.income);
+  const [otherDebt, setOtherDebt] = useState(B.otherDebt);
+  const [stress, setStress] = useState(B.stress);
+  const [dsrCap, setDsrCap] = useState(B.dsrCap);
+  const [dsrYears, setDsrYears] = useState(B.dsrYears);
   const [schedOpen, setSchedOpen] = useState(false);
   const [midCapOn, setMidCapOn] = useState(B.midCapOn);
   const [midCap, setMidCap] = useState(B.midCap);
@@ -634,7 +702,9 @@ function Calculator() {
   const [payRate, setPayRate] = useState(B.payRate);
   const [tab, setTab] = useState("flow");
 
-  const P = { sched, moveIn, rate, gRate, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, settle, midCapOn, midCap, loanCap, ltv, equityNow, monthlySave, payRate };
+  const P = { sched, moveIn, rate, gRate,
+    ratePath: rateMode === "path" ? ratePath : null,
+    dsrOn, income, otherDebt, stress, dsrCap, dsrYears, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, settle, midCapOn, midCap, loanCap, ltv, equityNow, monthlySave, payRate };
   const ready = !!typeKey && !!floorKey;
   const avail = typeKey ? availOptions(typeKey) : [];
   const floors = typeKey ? TYPES[typeKey].floors : [];
@@ -644,13 +714,17 @@ function Calculator() {
   const base = useMemo(() => (ready ? compute(typeKey, floorKey, picked, { ...P, loanFrom: 1, loanTo: 6, preOn: false }) : null),
     [typeKey, floorKey, picked, rate, gRate, settle, midCapOn, midCap, loanCap, ltv, equityNow, monthlySave, payRate]);
 
+  const flatBase = useMemo(
+    () => (ready ? compute(typeKey, floorKey, picked, { ...P, ratePath: null }) : null),
+    [typeKey, floorKey, picked, sched, moveIn, rate, gRate, rateMode, ratePath, dsrOn, income, otherDebt, stress, dsrCap, dsrYears, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, settle, midCapOn, midCap, loanCap, ltv, equityNow, monthlySave, payRate]);
+
   const calc = useMemo(() => (ready ? compute(typeKey, floorKey, picked, P) : null),
-    [typeKey, floorKey, picked, sched, moveIn, rate, gRate, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, settle, midCapOn, midCap, loanCap, ltv, equityNow, monthlySave, payRate]);
+    [typeKey, floorKey, picked, sched, moveIn, rate, gRate, rateMode, ratePath, dsrOn, income, otherDebt, stress, dsrCap, dsrYears, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, settle, midCapOn, midCap, loanCap, ltv, equityNow, monthlySave, payRate]);
 
   const cross = useMemo(() => (ready
     ? TYPE_KEYS.map((t) => ({ t, ...compute(t, floorKey, picked, P) }))
     : null),
-    [typeKey, floorKey, picked, sched, moveIn, rate, gRate, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, settle, midCapOn, midCap, loanCap, ltv, equityNow, monthlySave, payRate]);
+    [typeKey, floorKey, picked, sched, moveIn, rate, gRate, rateMode, ratePath, dsrOn, income, otherDebt, stress, dsrCap, dsrYears, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, settle, midCapOn, midCap, loanCap, ltv, equityNow, monthlySave, payRate]);
 
   const [toast, setToast] = useState("");
   const [shareUrl, setShareUrl] = useState("");
@@ -659,7 +733,8 @@ function Calculator() {
     typeKey, floorKey, picked, rate, gRate, settle, midCapOn, midCap, loanCap, ltv,
     payRate, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, moveIn,
     schedDates: sched.map((r) => r.date),
-    equityNow, monthlySave,
+    rateMode, ratePath, dsrOn, stress, dsrCap, dsrYears,
+    income, otherDebt, equityNow, monthlySave,
   };
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(""), 3200); };
@@ -926,6 +1001,10 @@ function Calculator() {
         .dday .cnt { margin-left:auto; font-weight:650; color:var(--hi); }
         .dday .cnt.near { color:var(--debit); }
 
+        .years { display:grid; grid-template-columns:repeat(auto-fit,minmax(78px,1fr));
+          gap:8px; margin-top:10px; }
+        .ycell label { display:block; font-size:11px; color:var(--ink2); margin-bottom:3px; }
+
         .pane { display:none; }
         .pane.on { display:block; }
         .printonly { display:none; }
@@ -1105,6 +1184,46 @@ function Calculator() {
                 <input type="range" min="3" max="8" step="0.1" value={rate}
                   onChange={(e) => setRate(+e.target.value)} />
                 <div className="note">현재 4.9% 고정 협의 중 · 확정 조건 아님</div>
+              </div>
+              <div className="field" style={{ gridColumn: "1 / -1" }}>
+                <label>중도금 금리 변동 시나리오</label>
+                <div className="row" style={{ marginTop: 2 }}>
+                  <button className={`fbtn ${rateMode === "fixed" ? "on" : ""}`}
+                    onClick={() => setRateMode("fixed")}>단일 고정</button>
+                  <button className={`fbtn ${rateMode === "path" ? "on" : ""}`}
+                    onClick={() => setRateMode("path")}>연도별 변동</button>
+                  {rateMode === "path" && Object.entries(RATE_PRESETS).map(([k, v]) => (
+                    <button key={k} className="pbtn"
+                      onClick={() => setRatePath(v.f(rate))}>{v.label}</button>
+                  ))}
+                </div>
+                {rateMode === "path" && (
+                  <>
+                    <div className="years">
+                      {RATE_YEARS.map((y, i) => (
+                        <div className="ycell" key={y}>
+                          <label>{y}년</label>
+                          <input type="number" step="0.1" min="0" value={ratePath[i]}
+                            onChange={(e) => {
+                              const v = [...ratePath];
+                              v[i] = +e.target.value || 0;
+                              setRatePath(v);
+                            }} />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="note">
+                      회차별 실행일부터 입주일까지의 기간을 연 단위로 쪼개 각 해의 금리를
+                      적용합니다. 단일 고정({rate.toFixed(2)}%) 대비
+                      <b className="num" style={{
+                        color: calc.interest > flatBase.interest ? "var(--debit)" : "var(--credit)",
+                      }}> {calc.interest > flatBase.interest ? "+" : "−"}
+                        {won(Math.abs(calc.interest - flatBase.interest))}</b>
+                      입니다. 공고문에 금리 변경 시 이의 제기 불가 조항이 있어 상방 위험은
+                      계약자가 집니다.
+                    </div>
+                  </>
+                )}
               </div>
               <div className="field">
                 <label>중도금 대출 보증료율 (연 %)</label>
@@ -1365,6 +1484,7 @@ function Calculator() {
             <button className={`tab ${tab === "cross" ? "on" : ""}`} onClick={() => setTab("cross")}>타입 비교</button>
             <button className={`tab ${tab === "int" ? "on" : ""}`} onClick={() => setTab("int")}>중도금 이자</button>
             <button className={`tab ${tab === "save" ? "on" : ""}`} onClick={() => setTab("save")}>저축 시뮬레이션</button>
+            <button className={`tab ${tab === "dsr" ? "on" : ""}`} onClick={() => setTab("dsr")}>잔금 대출 여력</button>
           </div>
           <div className="pbody">
             <div className={`pane ${tab === "flow" ? "on" : ""}`} data-pane="flow" data-pane-ko="납부 일정">{(
@@ -1717,6 +1837,115 @@ function Calculator() {
                 </div>
               </>
             )}</div>
+            <div className={`pane ${tab === "dsr" ? "on" : ""}`} data-pane="dsr" data-pane-ko="잔금 대출 여력">
+              <div className="ctrl" style={{ marginBottom: 14 }}>
+                <div className="field">
+                  <label>DSR 심사 반영</label>
+                  <div style={{ display: "flex", gap: 5, marginTop: 2 }}>
+                    <button className={`fbtn ${!dsrOn ? "on" : ""}`} onClick={() => setDsrOn(false)}>미반영</button>
+                    <button className={`fbtn ${dsrOn ? "on" : ""}`} onClick={() => setDsrOn(true)}>반영</button>
+                  </div>
+                  <div className="note">켜면 헤드라인의 대출액에도 DSR 한도가 함께 적용됩니다.</div>
+                </div>
+                <div className="field">
+                  <label>연소득 (만원) — 부부 합산 가능</label>
+                  <input type="number" step="100" value={income}
+                    onChange={(e) => setIncome(+e.target.value || 0)} />
+                  <div className="note">공유 링크에 담기지 않습니다.</div>
+                </div>
+                <div className="field">
+                  <label>기존 대출 연간 원리금 (만원)</label>
+                  <input type="number" step="50" value={otherDebt}
+                    onChange={(e) => setOtherDebt(+e.target.value || 0)} />
+                  <div className="note">신용대출·전세대출 등 합산</div>
+                </div>
+                <div className="field">
+                  <label>스트레스 금리 (%p)</label>
+                  <input type="number" step="0.1" value={stress}
+                    onChange={(e) => setStress(+e.target.value || 0)} />
+                  <div className="note">수도권 주담대 3.0% 기준 · 출처별로 달라 확인 필요</div>
+                </div>
+                <div className="field">
+                  <label>DSR 한도 (%)</label>
+                  <input type="number" step="5" value={dsrCap}
+                    onChange={(e) => setDsrCap(+e.target.value || 0)} />
+                  <div className="note">은행권 40%</div>
+                </div>
+                <div className="field">
+                  <label>주담대 만기 (년)</label>
+                  <input type="number" step="5" value={dsrYears}
+                    onChange={(e) => setDsrYears(+e.target.value || 1)} />
+                </div>
+              </div>
+
+              {income > 0 ? (<>
+                <table>
+                  <tbody>
+                    <tr>
+                      <td>산정금리 <span className="chip">DSR 심사용</span>
+                        <div className="note">실제 금리 {payRate.toFixed(2)}% + 스트레스 {stress}%p</div>
+                      </td>
+                      <td className="r num">{(calc.dsrRate * 100).toFixed(2)}%</td>
+                    </tr>
+                    <tr>
+                      <td>연간 상환 여력 (연소득 × {dsrCap}% − 기존 대출)</td>
+                      <td className="r num">{won(calc.annualRoom)}</td>
+                    </tr>
+                    <tr>
+                      <td>DSR 기준 대출 가능액</td>
+                      <td className="r num" style={{ fontWeight: 650 }}>{won(calc.dsrLoan)}</td>
+                    </tr>
+                    <tr>
+                      <td>규정 한도 (한도 {loanCap}억 · LTV {ltv}% 중 작은 값)</td>
+                      <td className="r num">{won(calc.ruleLoan)}</td>
+                    </tr>
+                    <tr className="total">
+                      <td>실제 받을 수 있는 금액</td>
+                      <td className="r num">{won(Math.min(calc.dsrLoan, calc.ruleLoan))}</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div className={`verdict ${calc.dsrLoan < calc.ruleLoan ? "warn" : ""}`}>
+                  {calc.dsrLoan < calc.ruleLoan ? (
+                    <>DSR이 먼저 걸립니다. 규정상 <b className="num">{won(calc.ruleLoan)}</b>까지
+                      가능하지만 현재 소득으로는 <b className="num">{won(calc.dsrLoan)}</b>까지만
+                      나옵니다 — 차액 <b className="num">{won(calc.ruleLoan - calc.dsrLoan)}</b>을
+                      잔금 시점에 현금으로 더 마련해야 합니다.
+                      규정 한도를 다 쓰려면 연소득이
+                      <b className="num"> {won(calc.needIncome)}</b>이어야 합니다.</>
+                  ) : (
+                    <>DSR은 걸리지 않습니다. 현재 소득이면 <b className="num">{won(calc.dsrLoan)}</b>까지
+                      가능하고, 규정 한도 <b className="num">{won(calc.ruleLoan)}</b>가 먼저
+                      막습니다. 소득 여유분만큼 금리가 올라도 버틸 수 있습니다.</>
+                  )}
+                </div>
+
+                <div className="note" style={{ marginTop: 10 }}>
+                  입주 후 실제 월 상환액은 {payRate.toFixed(2)}% 기준
+                  <b className="num"> {Math.round(monthlyPayment(Math.min(calc.dsrLoan, calc.ruleLoan), payRate / 100, dsrYears) / 1e4).toLocaleString()}만원</b>,
+                  심사에 쓰이는 산정금리 기준으로는
+                  <b className="num"> {Math.round(monthlyPayment(Math.min(calc.dsrLoan, calc.ruleLoan), calc.dsrRate, dsrYears) / 1e4).toLocaleString()}만원</b>
+                  입니다. 한도는 뒤 숫자로 심사하지만 실제로 내는 돈은 앞 숫자입니다.
+                </div>
+              </>) : (
+                <div className="note" style={{ marginTop: 4 }}>
+                  연소득을 넣으면 DSR 기준으로 실제 가능한 잔금 대출액을 역산합니다.
+                  지금은 규정 한도 {won(calc.ruleLoan)}를 받을 수 있다고 가정만 하고 있는데,
+                  입주 시점에 정말 그만큼 나오는지가 가장 큰 변수입니다.
+                </div>
+              )}
+
+              <div className="alert" style={{ borderLeftColor: "var(--ink3)", borderColor: "var(--rule)", background: "#F4F6F9" }}>
+                <b>2032년 규제는 알 수 없습니다.</b> 위 계산은 현행 기준 추정입니다.
+                DSR 한도(은행권 40%), 스트레스 금리, 수도권 주담대 한도는 모두 바뀔 수 있고,
+                스트레스 금리는 출처마다 수도권 주담대 3.0%와 1.5%로 엇갈립니다.
+                부천 소사는 2026년 10월 기준 규제지역이 아니어서 LTV 70%·한도 6억을
+                기본값으로 두었으나, 지정 여부가 바뀌면 달라집니다. 실제 한도는 반드시
+                취급 은행에서 확인하십시오.
+              </div>
+            </div>
+
           </div>
         </div>
 
