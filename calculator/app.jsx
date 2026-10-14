@@ -507,6 +507,79 @@ const GATE_CSS = `
     margin:0 !important; padding-top:14px; border-top:1px solid var(--rule); }
 `;
 
+
+/* ── 설정 공유 / 저장 ──────────────────────────
+   공유 링크에는 금액 입력값(자기자본·월 저축액)을 넣지 않는다. 카페 게시글에 그대로
+   붙여도 개인 재정이 드러나지 않게 하기 위한 것이다. 내 기기 저장(localStorage)에는
+   전부 담되 그 기기 밖으로 나가지 않는다.                                        */
+
+const SHARE_FIELDS = [
+  ["t", "typeKey"], ["f", "floorKey"], ["o", "picked"],
+  ["r", "rate"], ["g", "gRate"], ["s", "settle"],
+  ["mo", "midCapOn"], ["mc", "midCap"], ["lc", "loanCap"], ["lv", "ltv"],
+  ["pa", "payRate"], ["lf", "loanFrom"], ["lt", "loanTo"],
+  ["pe", "preOn"], ["pd", "preDate"], ["pn", "preN"], ["pr", "preRate"], ["pm", "preMode"],
+  ["mi", "moveIn"], ["sd", "schedDates"],
+];
+const MONEY_FIELDS = ["equityNow", "monthlySave"];
+
+const SAVE_KEY = "zenithbc:saved-config";
+
+function encodeState(st, defaults) {
+  const q = new URLSearchParams();
+  for (const [k, name] of SHARE_FIELDS) {
+    const v = st[name], d = defaults[name];
+    const sv = Array.isArray(v) ? v.join(".") : String(v);
+    const sd = Array.isArray(d) ? d.join(".") : String(d);
+    if (sv !== sd) q.set(k, sv);
+  }
+  return q.toString();
+}
+
+function decodeState(search) {
+  const q = new URLSearchParams(search);
+  if (![...q.keys()].length) return null;
+  const out = {};
+  for (const [k, name] of SHARE_FIELDS) {
+    if (!q.has(k)) continue;
+    const raw = q.get(k);
+    if (name === "picked") out[name] = raw ? raw.split(".") : [];
+    else if (name === "schedDates") out[name] = raw ? raw.split(".") : null;
+    else if (["settle", "midCapOn", "preOn"].includes(name)) out[name] = raw === "true";
+    else if (["rate", "gRate", "midCap", "loanCap", "ltv", "payRate",
+              "loanFrom", "loanTo", "preN", "preRate"].includes(name)) {
+      const n = Number(raw);
+      if (Number.isFinite(n)) out[name] = n;
+    } else out[name] = raw;
+  }
+  return out;
+}
+
+const loadSaved = () => {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+};
+const storeSaved = (obj) => {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(obj)); return true; }
+  catch { return false; }
+};
+const clearSaved = () => {
+  try { localStorage.removeItem(SAVE_KEY); } catch { /* 무시 */ }
+};
+
+// 오늘 기준 D-day. 날짜만 비교하므로 시분은 버린다.
+const todayISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const daysUntil = (iso) => {
+  const a = new Date(todayISO() + "T00:00:00");
+  const b = new Date(iso + "T00:00:00");
+  return Math.round((b - a) / 86400000);
+};
+
 /* ── component ─────────────────────────────── */
 
 export default function App() {
@@ -514,31 +587,51 @@ export default function App() {
   return ok ? <Calculator /> : <Gate />;
 }
 
+const DEFAULTS = {
+  typeKey: null, floorKey: null, picked: [], rate: 4.9, gRate: 0.13, settle: true,
+  midCapOn: false, midCap: 6.0, loanCap: 6.0, ltv: 70, payRate: 4.5,
+  loanFrom: 1, loanTo: 6, preOn: false, preDate: "2030-01-15", preN: 1,
+  preRate: 0, preMode: "slide", moveIn: MOVE_IN_PUB, schedDates: null,
+  equityNow: 0, monthlySave: 0,
+};
+
 function Calculator() {
-  const [typeKey, setTypeKey] = useState(null);
-  const [floorKey, setFloorKey] = useState(null);
-  const [picked, setPicked] = useState([]);
-  const [rate, setRate] = useState(4.9);
-  const [settle, setSettle] = useState(true);
-  const [gRate, setGRate] = useState(0.13);
-  const [loanFrom, setLoanFrom] = useState(1);
-  const [loanTo, setLoanTo] = useState(6);
+  // URL 공유값이 있으면 그것을, 없으면 이 기기에 저장해 둔 설정을, 둘 다 없으면 기본값을 쓴다.
+  const [boot] = useState(() => {
+    const fromUrl = typeof window !== "undefined" ? decodeState(window.location.search) : null;
+    if (fromUrl) return { src: "url", v: { ...DEFAULTS, ...fromUrl } };
+    const saved = loadSaved();
+    if (saved) return { src: "saved", v: { ...DEFAULTS, ...saved } };
+    return { src: "default", v: DEFAULTS };
+  });
+  const B = boot.v;
+
+  const [typeKey, setTypeKey] = useState(B.typeKey);
+  const [floorKey, setFloorKey] = useState(B.floorKey);
+  const [picked, setPicked] = useState(B.picked);
+  const [rate, setRate] = useState(B.rate);
+  const [settle, setSettle] = useState(B.settle);
+  const [gRate, setGRate] = useState(B.gRate);
+  const [loanFrom, setLoanFrom] = useState(B.loanFrom);
+  const [loanTo, setLoanTo] = useState(B.loanTo);
   const [blocked, setBlocked] = useState(null);
-  const [preOn, setPreOn] = useState(false);
-  const [preDate, setPreDate] = useState("2030-01-15");
-  const [preN, setPreN] = useState(1);
-  const [preRate, setPreRate] = useState(0);
-  const [preMode, setPreMode] = useState("slide");
-  const [sched, setSched] = useState(SCHEDULE_PUB);
-  const [moveIn, setMoveIn] = useState(MOVE_IN_PUB);
+  const [preOn, setPreOn] = useState(B.preOn);
+  const [preDate, setPreDate] = useState(B.preDate);
+  const [preN, setPreN] = useState(B.preN);
+  const [preRate, setPreRate] = useState(B.preRate);
+  const [preMode, setPreMode] = useState(B.preMode);
+  const [sched, setSched] = useState(() => (B.schedDates
+    ? SCHEDULE_PUB.map((r, i) => ({ ...r, date: B.schedDates[i] || r.date }))
+    : SCHEDULE_PUB));
+  const [moveIn, setMoveIn] = useState(B.moveIn);
   const [schedOpen, setSchedOpen] = useState(false);
-  const [midCapOn, setMidCapOn] = useState(false);
-  const [midCap, setMidCap] = useState(6.0);
-  const [loanCap, setLoanCap] = useState(6.0);
-  const [ltv, setLtv] = useState(70);
-  const [equityNow, setEquityNow] = useState(0);
-  const [monthlySave, setMonthlySave] = useState(0);
-  const [payRate, setPayRate] = useState(4.5);
+  const [midCapOn, setMidCapOn] = useState(B.midCapOn);
+  const [midCap, setMidCap] = useState(B.midCap);
+  const [loanCap, setLoanCap] = useState(B.loanCap);
+  const [ltv, setLtv] = useState(B.ltv);
+  const [equityNow, setEquityNow] = useState(B.equityNow);
+  const [monthlySave, setMonthlySave] = useState(B.monthlySave);
+  const [payRate, setPayRate] = useState(B.payRate);
   const [tab, setTab] = useState("flow");
 
   const P = { sched, moveIn, rate, gRate, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, settle, midCapOn, midCap, loanCap, ltv, equityNow, monthlySave, payRate };
@@ -558,6 +651,56 @@ function Calculator() {
     ? TYPE_KEYS.map((t) => ({ t, ...compute(t, floorKey, picked, P) }))
     : null),
     [typeKey, floorKey, picked, sched, moveIn, rate, gRate, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, settle, midCapOn, midCap, loanCap, ltv, equityNow, monthlySave, payRate]);
+
+  const [toast, setToast] = useState("");
+  const [shareUrl, setShareUrl] = useState("");
+
+  const current = {
+    typeKey, floorKey, picked, rate, gRate, settle, midCapOn, midCap, loanCap, ltv,
+    payRate, loanFrom, loanTo, preOn, preDate, preN, preRate, preMode, moveIn,
+    schedDates: sched.map((r) => r.date),
+    equityNow, monthlySave,
+  };
+
+  const say = (m) => { setToast(m); setTimeout(() => setToast(""), 3200); };
+
+  const makeShareUrl = () => {
+    const qs = encodeState(current, { ...DEFAULTS, schedDates: SCHEDULE_PUB.map((r) => r.date) });
+    const base = typeof window !== "undefined"
+      ? window.location.origin + window.location.pathname : "";
+    return qs ? `${base}?${qs}` : base;
+  };
+
+  const copyShare = async () => {
+    const url = makeShareUrl();
+    setShareUrl(url);
+    try {
+      await navigator.clipboard.writeText(url);
+      say("공유 링크를 복사했습니다. 금액 입력값은 링크에 담기지 않습니다.");
+    } catch {
+      say("복사가 막혀 있습니다. 아래 주소를 직접 복사해 주십시오.");
+    }
+  };
+
+  const saveMine = () => {
+    say(storeSaved(current)
+      ? "이 기기에 저장했습니다. 다음에 열면 그대로 복원됩니다."
+      : "저장에 실패했습니다. 사생활 보호 모드에서는 저장되지 않습니다.");
+  };
+
+  const resetAll = () => {
+    clearSaved();
+    if (typeof window !== "undefined") window.location.href = window.location.pathname;
+  };
+
+  // 다음 납부 회차 — 수정된 일정을 그대로 따른다
+  const nextDue = (() => {
+    if (!calc) return null;
+    const rows = calc.flow.filter((f) => f.amount > 1e4);
+    const up = rows.find((f) => daysUntil(f.date) >= 0);
+    if (!up) return { done: true };
+    return { ...up, days: daysUntil(up.date) };
+  })();
 
   const nLoanSel = Math.max(0, loanTo - loanFrom + 1);
 
@@ -763,6 +906,47 @@ function Calculator() {
         .disc li { font-size:11.5px; line-height:1.7; color:#52301F; margin-bottom:5px; }
         .disc b { font-weight:650; color:#7A2B21; }
 
+        .toolbar { display:flex; justify-content:space-between; align-items:center;
+          gap:10px; flex-wrap:wrap; margin:-8px 0 16px; }
+        .tools { display:flex; gap:6px; flex-wrap:wrap; }
+        .toolbar .src { font-size:11px; color:var(--ink3); }
+        .toast { border-left:3px solid var(--hi); background:#F3F6FA; padding:9px 12px;
+          font-size:12px; color:var(--ink2); margin-bottom:14px; }
+        .sharebox { margin-bottom:14px; }
+        .sharebox label { display:block; font-size:11px; color:var(--ink2); margin-bottom:4px; }
+        .sharebox input { width:100%; padding:6px 8px; border:1px solid var(--rule);
+          background:#fff; font:inherit; font-size:11.5px; color:var(--ink2); }
+
+        .dday { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;
+          border:1px solid var(--rule); border-left:4px solid var(--hi);
+          background:#fff; padding:9px 13px; margin-bottom:18px; font-size:12.5px; }
+        .dday .k { font-size:11px; color:var(--ink2); }
+        .dday .v { font-weight:650; }
+        .dday .d { color:var(--ink2); }
+        .dday .cnt { margin-left:auto; font-weight:650; color:var(--hi); }
+        .dday .cnt.near { color:var(--debit); }
+
+        .pane { display:none; }
+        .pane.on { display:block; }
+        .printonly { display:none; }
+
+        @media print {
+          .root { background:#fff; padding:0; font-size:10.5px; }
+          .noprint, .tabs { display:none !important; }
+          .printonly { display:block; font-size:11px; color:var(--ink2); }
+          .pane { display:block !important; page-break-inside:auto; }
+          .pane + .pane { margin-top:16px; padding-top:14px;
+            border-top:1px solid var(--rule); }
+          .pane::before { content:attr(data-pane-ko); display:block; font-weight:650;
+            font-size:12px; margin-bottom:8px; }
+          .panel, .sub, .verdict, .alert, .disc { page-break-inside:avoid; }
+          .panel { margin-bottom:12px; }
+          .headline { page-break-inside:avoid; }
+          .opt input, input[type=range] { display:none; }
+          .wrap { max-width:none; }
+          a { text-decoration:none; color:inherit; }
+        }
+
         .sitefoot { margin-top:16px; padding-top:11px; border-top:1px solid var(--rule);
           display:flex; justify-content:space-between; align-items:baseline; gap:10px;
           flex-wrap:wrap; font-size:11.5px; color:var(--ink3); }
@@ -782,7 +966,51 @@ function Calculator() {
             <p>전 6개 주택형 · 1,728세대 중 일반분양 1,158세대 · 입주예정 2032년 2월 ·
               입주자모집공고 제2026000382호</p>
           </div>
+          <div className="printonly">
+            {typeKey && floorKey
+              ? `${typeKey} ${calc.floor.label} · 출력 ${todayISO()}`
+              : `출력 ${todayISO()}`}
+          </div>
         </div>
+
+        <div className="toolbar noprint">
+          <div className="tools">
+            <button className="pbtn" onClick={copyShare}>공유 링크 복사</button>
+            <button className="pbtn" onClick={saveMine}>이 기기에 저장</button>
+            <button className="pbtn" onClick={() => window.print()}>인쇄 · PDF</button>
+            <button className="pbtn" onClick={resetAll}>초기화</button>
+          </div>
+          {boot.src !== "default" && (
+            <span className="src">
+              {boot.src === "url" ? "공유 링크의 설정으로 열렸습니다" : "이 기기에 저장된 설정을 불러왔습니다"}
+            </span>
+          )}
+        </div>
+        {toast && <div className="toast noprint">{toast}</div>}
+        {shareUrl && (
+          <div className="sharebox noprint">
+            <label>공유 링크</label>
+            <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
+          </div>
+        )}
+
+        {ready && nextDue && (
+          <div className="dday noprint">
+            {nextDue.done ? (
+              <span>예정된 납부 일정이 모두 지났습니다.</span>
+            ) : (
+              <>
+                <span className="k">다음 납부</span>
+                <span className="v">{nextDue.label}</span>
+                <span className="d num">{nextDue.date.replace(/-/g, ".")}</span>
+                <span className="num">{won(nextDue.amount)}</span>
+                <span className={`cnt num ${nextDue.days <= 30 ? "near" : ""}`}>
+                  {nextDue.days === 0 ? "오늘" : `D−${nextDue.days}`}
+                </span>
+              </>
+            )}
+          </div>
+        )}
 
         {ready && (
           <div className="headline">
@@ -1139,7 +1367,7 @@ function Calculator() {
             <button className={`tab ${tab === "save" ? "on" : ""}`} onClick={() => setTab("save")}>저축 시뮬레이션</button>
           </div>
           <div className="pbody">
-            {tab === "flow" && (
+            <div className={`pane ${tab === "flow" ? "on" : ""}`} data-pane="flow" data-pane-ko="납부 일정">{(
               <table>
                 <thead>
                   <tr>
@@ -1175,9 +1403,9 @@ function Calculator() {
                   </tr>
                 </tbody>
               </table>
-            )}
+            )}</div>
 
-            {tab === "cross" && (
+            <div className={`pane ${tab === "cross" ? "on" : ""}`} data-pane="cross" data-pane-ko="타입 비교">{(
               <>
                 <table>
                   <thead>
@@ -1233,9 +1461,9 @@ function Calculator() {
                   (84B 주방 업그레이드 1,340만원 대 84A 890만원).
                 </div>
               </>
-            )}
+            )}</div>
 
-            {tab === "int" && (
+            <div className={`pane ${tab === "int" ? "on" : ""}`} data-pane="int" data-pane-ko="중도금 이자">{(
               <>
                 <table>
                   <thead>
@@ -1431,9 +1659,9 @@ function Calculator() {
                   공고문에 금리 변경 시 이의 제기 불가 조항이 있으므로 상방 위험은 계약자 부담입니다.
                 </div>
               </>
-            )}
+            )}</div>
 
-            {tab === "save" && (
+            <div className={`pane ${tab === "save" ? "on" : ""}`} data-pane="save" data-pane-ko="저축 시뮬레이션">{(
               <>
                 <div className="ctrl" style={{ marginBottom: 14 }}>
                   <div className="field">
@@ -1488,7 +1716,7 @@ function Calculator() {
                   출산·육아기 저축률 하락과 투자수익을 함께 보려면 월별 시뮬레이션 쪽을 쓰시는 편이 낫습니다.
                 </div>
               </>
-            )}
+            )}</div>
           </div>
         </div>
 
