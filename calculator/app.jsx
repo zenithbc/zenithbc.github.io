@@ -255,6 +255,26 @@ const RATE_PRESETS = {
   down:  { label: "점진 하락", f: (r) => RATE_YEARS.map((_, i) => +Math.max(1.5, r - i * 0.25).toFixed(2)) },
 };
 
+/* ── 중도금 대출 조건 ───────────────────────────────────────────────
+   출처: 사업주체 공식 홈페이지 「중도금 대출신청 안내문」 및 은행별 안내장
+   (전북은행 2026.10.17 기준, 광주은행 2026.10.13 기준).
+   취급 은행이 동·라인별로 갈리고, 두 은행의 금리는 같다.                */
+const LOAN_BANKS = [
+  { bank: "전북은행 서울지점", tel: "02-751-2323 / 2317",
+    rows: ["101동 ~ 104동 전체",
+           "105동 59B타입 (2·5호 라인 2~49F)",
+           "105동 74B타입 (1호 라인 2~49F, 6호 라인 2~16F)"] },
+  { bank: "광주은행 수도권금융센터", tel: "02-783-0090",
+    rows: ["105동 74A타입 (3·4호 라인 2~49F)",
+           "105동 74B타입 (6호 라인 17~49F)",
+           "106동 전체"] },
+];
+const LOAN_DATES = [
+  { k: "사전예약", v: "2026.10.21(수) 10:00 ~ 10.23(금) 17:00", d: "2026-10-21" },
+  { k: "서류접수 · 전북", v: "2026.10.25(일) ~ 10.28(수) 10:00~16:00 (15:30 마감)", d: "2026-10-25" },
+  { k: "서류접수 · 광주", v: "2026.10.25(일) ~ 10.26(월) 10:00~16:00", d: "2026-10-25" },
+];
+
 // [from, to] 구간에 금리 경로를 적용한 누적 이자율 계수(= Σ 월수 × 연이율 / 12 / 100)
 function rateFactor(from, to, path, flatRate) {
   const a = new Date(from), b = new Date(to);
@@ -1175,6 +1195,84 @@ function Calculator() {
         {ready && (<>
 
         <div className="panel">
+          <div className="phead">
+            중도금 대출 안내 — 은행 안내장 기준
+            <span className="note" style={{ display: "inline", margin: 0 }}>
+              2026.10 공지
+            </span>
+          </div>
+          <div className="pbody">
+            <div className="alert">
+              <b>2주택 보유 세대는 중도금 대출이 불가합니다.</b> 2025.06.27 금융위원회
+              「가계부채 관리 강화 방안」이 이 사업장에 적용됩니다. 무주택 세대는 소유권
+              이전 등기일로부터 <b>6개월 이내 전입</b>, 1주택 보유 세대는 <b>6개월 이내 전입 +
+              기존주택 처분약정</b> 조건입니다. 약정을 어기면 대출 완제 여부와 관계없이
+              신용정보 집중기관에 통보되고 <b>3년간 주택관련 대출이 제한</b>됩니다.
+            </div>
+
+            <table style={{ marginTop: 12 }}>
+              <thead><tr><th>구분</th><th>취급 은행</th><th className="r">연락처</th></tr></thead>
+              <tbody>
+                {LOAN_BANKS.map((b) => b.rows.map((r, i) => (
+                  <tr key={b.bank + i}>
+                    <td>{r}</td>
+                    {i === 0 && <td rowSpan={b.rows.length}><b>{b.bank}</b></td>}
+                    {i === 0 && <td rowSpan={b.rows.length} className="r num">{b.tel}</td>}
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+            <div className="note" style={{ marginTop: 6 }}>
+              동·호수별로 취급 은행과 접수 일정이 다릅니다. 금리·한도·보증료는 두 은행이
+              같고, <b>중도상환수수료 조건만 다릅니다</b>(전북 대환 시 1.0%).
+            </div>
+
+            <table style={{ marginTop: 14 }}>
+              <tbody>
+                {LOAN_DATES.map((x) => {
+                  const dd = Math.ceil((new Date(x.d) - new Date()) / 86400000);
+                  return (
+                    <tr key={x.k}>
+                      <td style={{ width: 120 }}><b>{x.k}</b></td>
+                      <td className="num">{x.v}</td>
+                      <td className="r num" style={{ width: 74 }}>
+                        {dd > 0 ? <b style={{ color: "var(--hi)" }}>D−{dd}</b>
+                                : <span className="note" style={{ display: "inline" }}>지남</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div className="note" style={{ marginTop: 6 }}>
+              사전예약은 공식 홈페이지에서 받습니다. 접수는 견본주택(부천시 원미구 상동
+              529-3)에서 <b>계약자 본인이 직접</b> 해야 하고 대리 신청은 안 됩니다.
+              공동명의는 계약자 전원이 방문해야 합니다. 신청 자격은 <b>계약금 5% 납부자</b>입니다.
+            </div>
+
+            <table style={{ marginTop: 14 }}>
+              <tbody>
+                <tr><td style={{ width: 120 }}>대출 한도</td>
+                  <td>분양가액(유상옵션 제외)의 <b className="num">60%</b> 이내 · HUG 보증서 발급 범위 내</td></tr>
+                <tr><td>금리</td>
+                  <td><b className="num">연 4.90%</b> = COFIX(신규취급액 6개월 변동) <span className="num">3.18%</span> + 가산 <span className="num">1.72%</span> · 6개월마다 변동</td></tr>
+                <tr><td>만기 · 상환</td>
+                  <td><b className="num">2032.05.31</b>(입주개시일 + 3개월, HUG 보증기한 이내) · <b>만기 일시상환</b></td></tr>
+                <tr><td>이자</td>
+                  <td><b>시행사 후불제</b> — 입주개시월 이자납입일 다음날부터 계약자 부담. 이 계산기는 입주 시 일괄 정산으로 잡았습니다</td></tr>
+                <tr><td>보증료 · 인지세</td>
+                  <td>HUG 연 <span className="num">0.13%</span> 일시납 · 인지세 <span className="num">75,000원</span>(1억 초과 10억 이하, 계약자 1/2) — 모두 계약자 부담</td></tr>
+              </tbody>
+            </table>
+            <div className="note" style={{ marginTop: 6 }}>
+              회차별 실행일은 공고문과 같습니다 — 1차 2026.11.20 / 2차 2027.12.10 /
+              3차 2029.03.12 / 4차 2030.06.10 / 5차 2030.10.10 / 6차 2031.05.12.
+              각 회차 <b>10%씩 자동 실행</b>되어 분양대금 납부계좌로 들어갑니다.
+            </div>
+          </div>
+        </div>
+
+        <div className="panel">
           <div className="phead">대출·금리 조건</div>
           <div className="pbody">
             <div className="ctrl">
@@ -1183,7 +1281,12 @@ function Calculator() {
                 <div className="val num">{rate.toFixed(2)}%</div>
                 <input type="range" min="3" max="8" step="0.1" value={rate}
                   onChange={(e) => setRate(+e.target.value)} />
-                <div className="note">현재 4.9% 고정 협의 중 · 확정 조건 아님</div>
+                <div className="note">
+                  은행 안내장 기준 <b className="num">연 4.90%</b> — 기준금리{" "}
+                  <b className="num">COFIX 3.18%</b>(신규취급액 6개월 변동) + 가산금리{" "}
+                  <b className="num">1.72%</b>(확정). 전북·광주 두 은행이 같습니다(2026.10 기준).
+                  최초 금리는 <b>대출 취급시점</b>에 확정되고 이후 6개월마다 바뀝니다.
+                </div>
               </div>
               <div className="field" style={{ gridColumn: "1 / -1" }}>
                 <label>중도금 금리 변동 시나리오</label>
@@ -1214,7 +1317,9 @@ function Calculator() {
                     </div>
                     <div className="note">
                       회차별 실행일부터 입주일까지의 기간을 연 단위로 쪼개 각 해의 금리를
-                      적용합니다. 단일 고정({rate.toFixed(2)}%) 대비
+                      적용합니다. 움직이는 것은 기준금리(COFIX)뿐이고 가산금리 1.72%는
+                      확정이므로, 아래 값은 <b>COFIX + 1.72%</b>로 보시면 됩니다.
+                      단일 고정({rate.toFixed(2)}%) 대비
                       <b className="num" style={{
                         color: calc.interest > flatBase.interest ? "var(--debit)" : "var(--credit)",
                       }}> {calc.interest > flatBase.interest ? "+" : "−"}
@@ -1230,7 +1335,9 @@ function Calculator() {
                 <input type="number" step="0.01" value={gRate}
                   onChange={(e) => setGRate(+e.target.value || 0)} />
                 <div className="note">
-                  HUG 주택구입자금보증 연 0.130% 단일요율 기준 · 보증기관은 은행이 지정
+                  은행 안내장 확인 — HUG 보증 <b className="num">연 0.13%</b> 기본요율.
+                  보증금액 × 요율 × 보증기간 일수 ÷ 365로 산정해 <b>일시납</b>합니다.
+                  할인 대상자는 개인별 할인율이 적용되며 은행이 개별 안내합니다.
                 </div>
               </div>
               <div className="field">
@@ -1674,8 +1781,10 @@ function Calculator() {
                           <input type="number" step="0.1" min="0" value={preRate}
                             onChange={(e) => setPreRate(+e.target.value || 0)} />
                           <div className="note">
-                            대환이 아닌 자기자금 상환은 통상 면제라 0%를 기본값으로 두었습니다.
-                            <b style={{ color: "var(--debit)" }}> 반드시 대출 약정서에서 확인해야 합니다.</b>
+                            은행 안내장 확인 — <b>자기자금 상환은 면제</b>라 0%가 기본값입니다.
+                            다만 <b style={{ color: "var(--debit)" }}>타 금융기관 중도금대출로
+                            갈아타면 전북은행은 1.0%</b>를 물립니다(광주은행도 준공 전 타 기관
+                            대출로 상환 시 부과). 대환을 생각하신다면 1.0%를 넣어 보십시오.
                           </div>
                         </div>
                         <div className="field">
@@ -2025,13 +2134,15 @@ function Calculator() {
               유상옵션 계약금 납부 시점은 공고문에 없어 <b>2026년 12월로 임의 가정</b>했습니다.</li>
             <li><b>옵션 금액</b> — 공고문 공개 금액이며, 실제 유상옵션 계약은 그 총액 범위 내에서
               사업주체가 정한 기준에 따라 별도 체결됩니다. 품목·사양·구성이 변경될 수 있습니다.</li>
-            <li><b>중도금 대출 금리와 이자</b> — 4.9% 고정은 <b>협의 중인 조건으로 확정이 아니며</b>,
-              실제로는 변동금리로 재산정될 수 있습니다. 공고문에 금리 변경 시 이의를 제기할 수 없다는
-              조항이 있어 상방 위험은 계약자가 부담합니다. 이 자료의 이자는 단리 누적 추정치로,
-              실제 청구액과 다릅니다.</li>
-            <li><b>보증료</b> — HUG 주택구입자금보증 연 0.130% 단일요율을 적용했습니다. 보증기관과
-              요율은 은행이 정하며, 공고문은 보증수수료·인지대 등 제반 경비를 계약자 부담으로만
-              규정하고 금액을 명시하지 않습니다.</li>
+            <li><b>중도금 대출 금리와 이자</b> — 기본값 연 4.90%는 은행 안내장의 2026년 10월
+              기준 제시금리입니다(COFIX 3.18% + 가산 1.72%). <b>가산금리만 확정이고 기준금리는
+              6개월마다 바뀌므로 입주까지 고정되는 금리가 아닙니다.</b> 최초 적용금리도 대출
+              취급시점에 결정됩니다. 공고문에 금리 변경 시 이의를 제기할 수 없다는 조항이 있어
+              상방 위험은 계약자가 집니다. 이 자료의 이자는 단리 누적 추정치로 실제 청구액과
+              다릅니다.</li>
+            <li><b>보증료</b> — HUG 연 0.13% 기본요율을 적용했습니다(은행 안내장 확인).
+              보증금액 × 요율 × 보증기간 일수 ÷ 365로 산정해 일시납하며, 할인 대상자는 개인별
+              할인율이 적용되므로 실제 부담은 이보다 적을 수 있습니다.</li>
             <li><b>취득세</b> — 현행 세율 기준 추정입니다. 입주 시점인 2032년의 세제는 달라질 수
               있습니다.</li>
             <li><b>잔금 대출</b> — 한도·LTV·금리 모두 입력값에 따른 가정이며, 입주 시점의 규제와
