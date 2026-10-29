@@ -666,7 +666,7 @@ export default function App() {
 }
 
 const DEFAULTS = {
-  typeKey: null, floorKey: null, picked: [], rate: 4.9, gRate: 0.13, settle: true,
+  typeKey: null, floorKey: null, picked: [], rate: 5.15, gRate: 0.13, settle: true,
   midCapOn: false, midCap: 6.0, loanCap: 6.0, ltv: 70, payRate: 4.5,
   loanFrom: 1, loanTo: 6, preOn: false, preDate: "2030-01-15", preN: 1,
   preRate: 0, preMode: "slide", moveIn: MOVE_IN_PUB, schedDates: null,
@@ -1255,7 +1255,8 @@ function Calculator() {
                 <tr><td style={{ width: 120 }}>대출 한도</td>
                   <td>분양가액(유상옵션 제외)의 <b className="num">60%</b> 이내 · HUG 보증서 발급 범위 내</td></tr>
                 <tr><td>금리</td>
-                  <td><b className="num">연 4.90%</b> = COFIX(신규취급액 6개월 변동) <span className="num">3.18%</span> + 가산 <span className="num">1.72%</span> · 6개월마다 변동</td></tr>
+                  <td><b className="num">연 5.15%</b> = COFIX(신규취급액 6개월 변동) <span className="num">3.43%</span> + 가산 <span className="num">1.72%</span> · 6개월마다 변동<br />
+                    <span className="note">안내장 인쇄 시점은 연 4.90%(COFIX 3.18%)였고, 2026.10.15 공시로 COFIX가 <span className="num">+0.25%p</span> 올라 현재 적용금리는 <b className="num">5.15%</b>입니다.</span></td></tr>
                 <tr><td>만기 · 상환</td>
                   <td><b className="num">2032.05.31</b>(입주개시일 + 3개월, HUG 보증기한 이내) · <b>만기 일시상환</b></td></tr>
                 <tr><td>이자</td>
@@ -1279,13 +1280,18 @@ function Calculator() {
               <div className="field">
                 <label>중도금 대출 금리</label>
                 <div className="val num">{rate.toFixed(2)}%</div>
-                <input type="range" min="3" max="8" step="0.1" value={rate}
+                <input type="range" min="3" max="8" step="0.05" value={rate}
                   onChange={(e) => setRate(+e.target.value)} />
                 <div className="note">
-                  은행 안내장 기준 <b className="num">연 4.90%</b> — 기준금리{" "}
-                  <b className="num">COFIX 3.18%</b>(신규취급액 6개월 변동) + 가산금리{" "}
-                  <b className="num">1.72%</b>(확정). 전북·광주 두 은행이 같습니다(2026.10 기준).
-                  최초 금리는 <b>대출 취급시점</b>에 확정되고 이후 6개월마다 바뀝니다.
+                  기본값 <b className="num">연 5.15%</b> — 기준금리{" "}
+                  <b className="num">COFIX 3.43%</b>(신규취급액 6개월 변동) + 가산금리{" "}
+                  <b className="num">1.72%</b>(확정). 전북·광주 두 은행이 같습니다.
+                  <br />
+                  COFIX 추이: 2026.8월분 <span className="num">3.18%</span> → 9월분{" "}
+                  <span className="num">3.43%</span>(2026.10.15 공시, <span className="num">+0.25%p</span>).
+                  은행 안내장(2026.10월 배포)은 직전 공시인 3.18%로 인쇄되어 연 4.90%로 적었습니다.
+                  최초 적용금리는 <b>대출 취급시점</b>의 공시 COFIX로 확정되고 이후 6개월마다 바뀌므로,
+                  1차 실행(2026.11.20) 시점 금리는 아직 확정이 아닙니다.
                 </div>
               </div>
               <div className="field" style={{ gridColumn: "1 / -1" }}>
@@ -2134,8 +2140,10 @@ function Calculator() {
               유상옵션 계약금 납부 시점은 공고문에 없어 <b>2026년 12월로 임의 가정</b>했습니다.</li>
             <li><b>옵션 금액</b> — 공고문 공개 금액이며, 실제 유상옵션 계약은 그 총액 범위 내에서
               사업주체가 정한 기준에 따라 별도 체결됩니다. 품목·사양·구성이 변경될 수 있습니다.</li>
-            <li><b>중도금 대출 금리와 이자</b> — 기본값 연 4.90%는 은행 안내장의 2026년 10월
-              기준 제시금리입니다(COFIX 3.18% + 가산 1.72%). <b>가산금리만 확정이고 기준금리는
+            <li><b>중도금 대출 금리와 이자</b> — 기본값 연 5.15%는 2026년 9월분 COFIX(신규취급액
+              6개월 변동) 3.43%에 확정 가산금리 1.72%를 더한 값입니다. 9월분 COFIX는 2026.10.15
+              공시로 직전 3.18% 대비 0.25%p 올랐고, 은행 안내장에 적힌 연 4.90%는 그 직전
+              공시를 쓴 숫자입니다. <b>가산금리만 확정이고 기준금리는
               6개월마다 바뀌므로 입주까지 고정되는 금리가 아닙니다.</b> 최초 적용금리도 대출
               취급시점에 결정됩니다. 공고문에 금리 변경 시 이의를 제기할 수 없다는 조항이 있어
               상방 위험은 계약자가 집니다. 이 자료의 이자는 단리 누적 추정치로 실제 청구액과
